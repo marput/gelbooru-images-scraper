@@ -64,14 +64,14 @@ def getPage(pid):
         return int(pid/42+1)
 
 def getPIDFromPage(page):
-    if int(page) == 1:
-        return 0
-    else:
-        return int(page)*42+42
+        return int(page-1)*42
   
 def advancePage(url):
     pid = getPID(url)
-    pid = int(pid+42)
+    if int(pid) == 0:
+        pid = 42
+    else:
+        pid = int(pid+42)
     expression = '\d+(\.\d+)?$'
     address = re.sub(expression, str(pid), url)
     return address
@@ -283,9 +283,17 @@ def getDownloadLink(listOfImages):
     return finalLinks
 
 def downloadImage(finalLinks, imageTitles):
+    searchExpPng = '.png'
+    searchExpJpg = '.jpeg|jpg'
     for i in range(0, len(finalLinks)):
+        extension = ""
         try:
-            filename = str(imageTitles[i][:150])
+            searchObj = re.search(searchExpPng, finalLinks[i])
+            if searchObj:
+                extension = ".png"
+            else:
+                extension = ".jpg"
+            filename = str(imageTitles[i][:147] + extension)
             fullFileName = os.path.join(str(path), filename)
             fullFileName = str(fullFileName)
         except IndexError:
@@ -315,10 +323,12 @@ def getImageTitles(soup):
     return imageTitles
 
 def checkValidPages(listOfPages, lastPage):
-    for i in range(0, len(listOfPages)):
-        if int(listOfPages[i]) not in range(1, int(lastPage+1)):
+    i = 0
+    while 0 <= i < len(listOfPages):
+        if not 1 <= int(listOfPages[i]) < lastPage+1:
             del listOfPages[i]
             i-=1
+        i+=1
     return listOfPages
 
 def checkIfPageRange(listOfPages):
@@ -373,11 +383,12 @@ while(True):
 
 if downloadAll == True:
     listOfPages = []
-    listOfPages.extend(0, int(lastPage))
+    listOfPages.extend(1, int(lastPage))
     listOfPages.append(int(lastPage))
 
 for i in range(0, len(listOfPages)):
-    pid = getPIDFromPage(listOfPages[i])
+    print(url)
+    pid = getPIDFromPage(int(listOfPages[i]))
     url = replacePID(url, pid)
     page = requests.get(url)
     soup = BeautifulSoup(page.text, 'html.parser')
@@ -397,4 +408,4 @@ for i in range(0, len(listOfPages)):
     print("Downloading page " + str(i+1) + " out of " + str(len(listOfPages)))
     print("Currently on page " + str(currentPage) + " out of " + str(lastPage) + " in total.")
     downloadImage(listOfImages, imageTitles)
-
+    print(url)

@@ -9,8 +9,10 @@ import tempfile
 import re
 import lxml
 import logging
+from tqdm import tqdm
 from datetime import datetime
 from bs4 import BeautifulSoup
+from alive_progress import config_handler
 
 downloadAll = False
 
@@ -112,7 +114,7 @@ def getAddress():
         print("Enter the URL address you want to scrape on Gelbooru: ")
         address = input()
         try:
-            addressRequest = requests.head(address);
+            addressRequest = requests.head(address)
             print(addressRequest.status_code)
         except requests.ConnectionError:
             print("Failed to connect.")
@@ -239,40 +241,28 @@ def makeImageLinks(previewLinks):
 
 def getDownloadLink(listOfImages):
     finalLinks = []
-    for i in range(0, len(listOfImages)):
+    for i in tqdm(range(0, len(listOfImages))):
         finalLink = listOfImages[i]
         isError = False
         try:
-            time.sleep(0.5)
             urllib.request.urlopen(finalLink)
         except urllib.error.HTTPError as e:
-            logging.error("PNG link returned with HTTP code " + str(e.code) + " " + finalLink)
-            print("Falling back to JPG")
             finalLink = re.sub('.png', '.jpg', finalLink)
             isError = True
         except urllib.error.URLError as e:
-            logging.error("PNG URL error: " + str(e.reason) + " " + finalLink)
-            print("Falling back to JPG")
             finalLink = re.sub('.png', '.jpg', finalLink)
             isError = True
         if isError:
             try:
-                time.sleep(0.5)
                 urllib.request.urlopen(finalLink)
                 isError = False
             except urllib.error.HTTPError as e:
-                logging.error("JPG link returned with code " + str(e.code) + " " + finalLink)
-                print("Falling back to JPEG")
                 finalLink = re.sub('.jpg', '.jpeg', finalLink)
             except urllib.error.URLError as e:
-                logging.error("JPG URL error: " + str(e.reason) + " " + finalLink)
-                print("Falling back to JPEG")
                 finalLink = re.sub('.jpg', '.jpeg', finalLink)
         if isError:
             try:
-                time.sleep(0.5)
                 urllib.request.urlopen(finalLink)
-                isError = False
             except urllib.error.HTTPError as e:
                 logging.error("Final iteration JPEG link returned with code " + str(e.code))
                 print("Final iteration returned with HTTP error code, check log file for details")
@@ -282,28 +272,23 @@ def getDownloadLink(listOfImages):
         finalLinks.append(finalLink)
     return finalLinks
 
-def downloadImage(finalLinks, imageTitles):
+def downloadImage(finalLinks):
     searchExpPng = '.png'
     searchExpJpg = '.jpeg|jpg'
-    for i in range(0, len(finalLinks)):
+    for i in tqdm(range(0, len(finalLinks))):
         extension = ""
-        try:
-            searchObj = re.search(searchExpPng, finalLinks[i])
-            if searchObj:
-                extension = ".png"
-            else:
-                extension = ".jpg"
-            filename = str(imageTitles[i][:147] + extension)
-            fullFileName = os.path.join(str(path), filename)
-            fullFileName = str(fullFileName)
-        except IndexError:
-            filename = str(int(time.time()))
-            fullFileName = os.path.join(str(path), filename)
-            fullFileName = str(fullFileName)
+        searchObj = re.search(searchExpPng, finalLinks[i])
+        if searchObj:
+            extension = ".png"
+        else:
+            extension = ".jpg"
+        filename = str(int(time.time())) + extension
+        fullFileName = os.path.join(str(path), filename)
+        fullFileName = str(fullFileName)
         try:
             urllib.request.urlretrieve(finalLinks[i], fullFileName)
         except urllib.error.HTTPError as e:
-            logging.error("Failed to download image (HTTP Error) with code: " + e.code + ". From URL: " + str(finalLinks[i]) + ". Is the URL valid?")
+            logging.error("Failed to download image (HTTP Error) with code: " + str(e.code) + ". From URL: " + str(finalLinks[i]) + ". Is the URL valid?")
         except urllib.error.URLError as e:
             logging.error("Failed to download image (URL Error) with reason: " + str(e.reason) + ". From URL: " + str(finalLinks[i]) + ". Is the URL valid?")
     
@@ -339,8 +324,25 @@ def checkIfPageRange(listOfPages):
 
 def replacePID(url, pid):
     expression = '\d+(\.\d+)?$'
-    address = re.sub(expression, str(pid), str(url))
+    searchObj = re.search(expression, url)
+    if searchObj:
+        address = re.sub(expression, str(pid), str(url))
+    else:
+        address = url + "&" + str(pid)
     return address
+
+def getUncleanTokens(userInput):
+    tempArray = userInput.split(",")
+    userInputArray = []
+    for i in range(0, len(tempArray)):
+        userInputArray.append(tempArray[i].strip())
+        uncleanTokens = []
+        for i in range(0, len(userInputArray)):
+            text = userInputArray[i].strip()
+            results = tokenizer(text)
+            for j in range(0, len(results)):
+                uncleanTokens.append((results[j][0], results[j][1]))
+    return uncleanTokens
 
 opener=urllib.request.build_opener()
 opener.addheaders=[('User-Agent','Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/36.0.1941.0 Safari/537.36')]
@@ -363,21 +365,12 @@ listOfHrefs = getListOfHrefs(pagination)
 lastPage = getHighestPage(listOfSitePages, listOfHrefs, int(currentPage))
 
 while(True):
-    userInput = getUserInput("Enter pages/page ranges to download images from, separated by commas.\n Input 0 to download from eevery page. \n Ranges are inclusive, written like 25-30 (pages from 25 to 30).\n")
-    tempArray = userInput.split(",")
-    userInputArray = []
-    for i in range(0, len(tempArray)):
-        userInputArray.append(tempArray[i].strip())
-        uncleanTokens = []
-        for i in range(0, len(userInputArray)):
-            text = userInputArray[i].strip()
-            results = tokenizer(text)
-            for j in range(0, len(results)):
-                uncleanTokens.append((results[j][0], results[j][1]))
-        cleanTokens = cleanUserInput(uncleanTokens)
-        listOfPages = parseUserInput(cleanTokens)
-        listOfPages = list(set(listOfPages))
-        listOfPages = checkValidPages(listOfPages, lastPage)
+    userInput = getUserInput("Enter pages/page ranges to download images from, separated by commas.\n Input 0 to download from every page. \n Ranges are inclusive, written like 25-30 (pages from 25 to 30).\n")
+    uncleanTokens = getUncleanTokens(userInput)
+    cleanTokens = cleanUserInput(uncleanTokens)
+    listOfPages = parseUserInput(cleanTokens)
+    listOfPages = list(set(listOfPages))
+    listOfPages = checkValidPages(listOfPages, lastPage)
     if checkIfPageRange(listOfPages):
         break
 
@@ -387,7 +380,6 @@ if downloadAll == True:
     listOfPages.append(int(lastPage))
 
 for i in range(0, len(listOfPages)):
-    print(url)
     pid = getPIDFromPage(int(listOfPages[i]))
     url = replacePID(url, pid)
     page = requests.get(url)
@@ -398,14 +390,12 @@ for i in range(0, len(listOfPages)):
     currentPage = pagination.find('b').text
     listOfSitePages = getPages(pages)
     lastPage = getHighestPage(listOfSitePages, listOfHrefs, int(currentPage))
-    imageTitles = getImageTitles(soup)
     previewLinks = makePreviewLinks(soup)
 
-    listOfSitePages = getPages(pages)
-
     listOfImages = makeImageLinks(previewLinks)
+    print("Making download links...")
     listOfImages = getDownloadLink(listOfImages)
     print("Downloading page " + str(i+1) + " out of " + str(len(listOfPages)))
     print("Currently on page " + str(currentPage) + " out of " + str(lastPage) + " in total.")
-    downloadImage(listOfImages, imageTitles)
     print(url)
+    downloadImage(listOfImages)

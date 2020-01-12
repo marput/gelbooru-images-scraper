@@ -323,12 +323,13 @@ def checkIfPageRange(listOfPages):
         return False
 
 def replacePID(url, pid):
-    expression = '\d+(\.\d+)?$'
+    expression = '&pid=\d+$'
+    properPid = "&pid=" + str(pid)
     searchObj = re.search(expression, url)
     if searchObj:
-        address = re.sub(expression, str(pid), str(url))
+        address = re.sub(expression, properPid, str(url))
     else:
-        address = url + "&" + str(pid)
+        address = url + properPid
     return address
 
 def getUncleanTokens(userInput):

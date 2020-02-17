@@ -1,51 +1,39 @@
 import requests
 import time
 import shutil
-import errno
-import urllib.request
 import os
 import sys
-import tempfile
 import re
-import lxml
 import logging
-from tqdm import tqdm
+import readline, glob
 from datetime import datetime
 from bs4 import BeautifulSoup
-from alive_progress import config_handler
 
-downloadAll = False
+log_file_name = "gelbooru-downloader.log"
 
-def is_pathname_valid(pathname: str) -> bool:
-    '''
-    `True` if the passed pathname is a valid pathname for the current OS;
-    `False` otherwise.
-    '''
-    try:
-        if not isinstance(pathname, str) or not pathname:
-            return False
+def printProgressBar (iteration, total, prefix = '', suffix = '', decimals = 1, length = 100, fill = '#', printEnd = "\r\n"):
+    """
+    Call in a loop to create terminal progress bar
+    @params:
+        iteration   - Required  : current iteration (Int)
+        total       - Required  : total iterations (Int)
+        prefix      - Optional  : prefix string (Str)
+        suffix      - Optional  : suffix string (Str)
+        decimals    - Optional  : positive number of decimals in percent complete (Int)
+        length      - Optional  : character length of bar (Int)
+        fill        - Optional  : bar fill character (Str)
+        printEnd    - Optional  : end character (e.g. "\r", "\r\n") (Str)
+    """
+    percent = ("{0:." + str(decimals) + "f}").format(100 * (iteration / float(total)))
+    filledLength = int(length * iteration // total)
+    bar = fill * filledLength + '-' * (length - filledLength)
+    print('\r%s |%s| %s%% %s' % (prefix, bar, percent, suffix), end = printEnd)
+    # Print New Line on Complete
+    if iteration == total: 
+        print()
 
-        _, pathname = os.path.splitdrive(pathname)
-
-        root_dirname = os.environ.get('HOMEDRIVE', 'C:') \
-            if sys.platform == 'win32' else os.path.sep
-        assert os.path.isdir(root_dirname)   # ...Murphy and her ironclad Law
-
-        root_dirname = root_dirname.rstrip(os.path.sep) + os.path.sep
-
-        for pathname_part in pathname.split(os.path.sep):
-            try:
-                os.lstat(root_dirname + pathname_part)
-            except OSError as exc:
-                if hasattr(exc, 'winerror'):
-                    if exc.winerror == ERROR_INVALID_NAME:
-                        return False
-                elif exc.errno in {errno.ENAMETOOLONG, errno.ERANGE}:
-                    return False
-    except TypeError as exc:
-        return False
-    else:
-        return True
+def completePath(text, state):
+    return (glob.glob(text+'*' + '/')+[None])[state]
 
 def getPID(url):
     pid = 0
@@ -111,8 +99,7 @@ def getListOfHrefs(pagination):
 
 def getAddress():
     while(True):
-        print("Enter the URL address you want to scrape on Gelbooru: ")
-        address = input()
+        address = input("Enter the URL address you want to scrape on Gelbooru: ")
         try:
             addressRequest = requests.head(address)
             print(addressRequest.status_code)
@@ -123,17 +110,21 @@ def getAddress():
         except:
             print("Unknown error. (Are you sure you've entered the address correctly?)")
             continue
-        testExpression = '^https:\/\/gelbooru\.com.+|^http:\/\/gelbooru\.com.+|^www\.gelbooru\.com.+|^https:\/\/www\.gelbooru\.com.+|^http:\/\/www\.gelbooru\.com.+'
+        testExpression = '.*gelbooru\.com.+'
         searchObj = re.search(testExpression, address)
         if 100 <= addressRequest.status_code <= 299 and searchObj:
             return address
 
 def getPath():
-    while(True):
-        print("Enter the path to directory where images will get saved to (Maximum 150 characters): ")
-        path = input()
-        if is_pathname_valid(path) and len(path) < 150:
+    while True:
+        readline.set_completer_delims(' \t\n;')
+        readline.parse_and_bind("tab: complete")
+        readline.set_completer(completePath)
+        path = input("Enter the path to directory where images will get saved to: ")
+        path = os.path.expanduser(path)
+        if os.path.isdir(path): 
             return path
+        print("Path doesn't exist, try again.")
 
 tokens = (
   ('DIGIT', re.compile(r"(?<!\.)\b[0-9]+\b(?!\.)")),
@@ -169,12 +160,7 @@ def cleanUserInput(uncleanTokens):
         if uncleanTokens[i][0] != 'STRING':
             value = uncleanTokens[i][1]
             if uncleanTokens[i][0] == 'DIGIT':
-                if uncleanTokens[i][1] == '0':
-                    global downloadAll
-                    downloadAll = True
-                    break
-                else:
-                    value = int(value.lstrip('0'))
+                value = int(value.lstrip('0'))
             cleanTokens.append((uncleanTokens[i][0], value))
     return cleanTokens
 
@@ -239,60 +225,95 @@ def makeImageLinks(previewLinks):
         listOfImages.append(link)
     return listOfImages
 
-def getDownloadLink(listOfImages):
+extensions = (
+    ('.png', r".png"),
+    ('.jpg', r".jpeg"),
+    ('.jpg', r".jpg"),
+    ('.gif', r".gif"),
+    ('.webm', r".webm"),
+    ('.mp4', r".mp4")
+)
+
+def getDownloadLink(listOfImages, session):
     finalLinks = []
-    for i in tqdm(range(0, len(listOfImages))):
+    printProgressBar(0, len(listOfImages), 'Making links...', 'Complete', length=50)
+    for i in range(0, len(listOfImages)):
         finalLink = listOfImages[i]
-        isError = False
-        try:
-            urllib.request.urlopen(finalLink)
-        except urllib.error.HTTPError as e:
-            finalLink = re.sub('.png', '.jpg', finalLink)
-            isError = True
-        except urllib.error.URLError as e:
-            finalLink = re.sub('.png', '.jpg', finalLink)
-            isError = True
-        if isError:
+        for j in range(1, len(extensions)):
             try:
-                urllib.request.urlopen(finalLink)
-                isError = False
-            except urllib.error.HTTPError as e:
-                finalLink = re.sub('.jpg', '.jpeg', finalLink)
-            except urllib.error.URLError as e:
-                finalLink = re.sub('.jpg', '.jpeg', finalLink)
-        if isError:
-            try:
-                urllib.request.urlopen(finalLink)
-            except urllib.error.HTTPError as e:
-                logging.error("Final iteration JPEG link returned with code " + str(e.code))
-                print("Final iteration returned with HTTP error code, check log file for details")
-            except urllib.error.URLError as e:
-                logging.error("Final iteration JPEG URL error: " + str(e.reason))
-                print("Final iteration returned with URL error, check log file for details")
+                r = requests.head(finalLink)
+                r.raise_for_status()
+            except requests.exceptions.HTTPError as errh:
+                finalLink = re.sub(extensions[j-1][1], extensions[j][1], finalLink)
+                continue
+            except requests.exceptions.ConnectionError as errc:
+                with open(log_file_name, 'a') as log_file:
+                    log_file.write(strftime("%d-%m-%Y %H:%M:%S", localtime()) + " Connection error:",errc + '\n')
+                break
+            except requests.exceptions.Timeout as errt:
+                with open(log_file_name, 'a') as log_file:
+                    log_file.write(strftime("%d-%m-%Y %H:%M:%S", localtime()) + " Timeout error:",errt + '\n')
+                break
+            except requests.exceptions.TooManyRedirects as errr:
+                with open(log_file_name, 'a') as log_file:
+                    log_file.write(strftime("%d-%m-%Y %H:%M:%S", localtime()) + " Redirects error:",errr + '\n')
+                break
+            except requests.exceptions.RequestException as erre:
+                with open(log_file_name, 'a') as log_file:
+                    log_file.write(strftime("%d-%m-%Y %H:%M:%S", localtime()) + " Request error:",erre + '\n')
+                break
         finalLinks.append(finalLink)
+        time.sleep(0.1)
+        printProgressBar(i+1, len(listOfImages), 'Making links...', 'Complete', length=50)
     return finalLinks
 
-def downloadImage(finalLinks):
-    searchExpPng = '.png'
-    searchExpJpg = '.jpeg|jpg'
-    for i in tqdm(range(0, len(finalLinks))):
-        extension = ""
-        searchObj = re.search(searchExpPng, finalLinks[i])
-        if searchObj:
-            extension = ".png"
-        else:
-            extension = ".jpg"
-        filename = str(int(time.time())) + extension
-        fullFileName = os.path.join(str(path), filename)
-        fullFileName = str(fullFileName)
-        try:
-            urllib.request.urlretrieve(finalLinks[i], fullFileName)
-        except urllib.error.HTTPError as e:
-            logging.error("Failed to download image (HTTP Error) with code: " + str(e.code) + ". From URL: " + str(finalLinks[i]) + ". Is the URL valid?")
-        except urllib.error.URLError as e:
-            logging.error("Failed to download image (URL Error) with reason: " + str(e.reason) + ". From URL: " + str(finalLinks[i]) + ". Is the URL valid?")
-    
+def determineExtension(link):
+    extension = ""
+    for element in extensions:
+        if re.search(element[1], link):
+            extension = element[0]
+            return extension
+    return "-1"
 
+def downloadPage(finalLinks, session):
+    printProgressBar(0, len(finalLinks), 'Downloading...', 'Complete', length=50)
+    for i in range(0, len(finalLinks)):
+        extension = determineExtension(finalLinks[i])
+        if extension == "-1":
+            with open(log_file_name, 'a') as log_file:
+                log_file.write(strftime("%d-%m-%Y %H:%M:%S", localtime()) + " Unknown extension for link:" + finalLinks[i] + '\n')
+            continue
+        filename = str(int(time.time())) + extension
+        full_path = os.path.join(str(path), filename)
+        try:
+            r = session.get(finalLinks[i], stream=True)
+            r.raise_for_status()
+        except requests.exceptions.HTTPError as errh:
+            with open(log_file_name, 'a') as log_file:
+                log_file.write(strftime("%d-%m-%Y %H:%M:%S", localtime()) + " Http error:",errh + '\n')
+            continue
+        except requests.exceptions.ConnectionError as errc:
+            with open(log_file_name, 'a') as log_file:
+                log_file.write(strftime("%d-%m-%Y %H:%M:%S", localtime()) + " Connection error:",errc + '\n')
+            continue
+        except requests.exceptions.Timeout as errt:
+            with open(log_file_name, 'a') as log_file:
+                log_file.write(strftime("%d-%m-%Y %H:%M:%S", localtime()) + " Timeout error:",errt + '\n')
+            continue
+        except requests.exceptions.TooManyRedirects as errr:
+            with open(log_file_name, 'a') as log_file:
+                log_file.write(strftime("%d-%m-%Y %H:%M:%S", localtime()) + " Redirects error:",errr + '\n')
+            continue
+        except requests.exceptions.RequestException as erre:
+            with open(log_file_name, 'a') as log_file:
+                log_file.write(strftime("%d-%m-%Y %H:%M:%S", localtime()) + " Request error:",erre + '\n')
+            continue
+        with open(full_path, 'wb') as out_file:
+            r.raw.decode_content = True
+            shutil.copyfileobj(r.raw, out_file)
+        del r
+        time.sleep(0.5)
+        printProgressBar(i+1, len(finalLinks), 'Downloading...', 'Complete', length=50)
 
 def getImageTitles(soup):
     tempImageTitles = []
@@ -345,13 +366,38 @@ def getUncleanTokens(userInput):
                 uncleanTokens.append((results[j][0], results[j][1]))
     return uncleanTokens
 
-opener=urllib.request.build_opener()
-opener.addheaders=[('User-Agent','Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/36.0.1941.0 Safari/537.36')]
-urllib.request.install_opener(opener)
+def getUserPages(lastPage):
+    while(True):
+        uncleanTokens = getUncleanTokens(input("Enter pages to scrap images from. Separate inputs by commas, terminate with semicolon. Indicate range with -. Eg. 1-18, 25, 30-35;. There are " + str(lastPage) + " pages in total.\n"))
+        cleanTokens = cleanUserInput(uncleanTokens)
+        listOfPages = parseUserInput(cleanTokens)
+        listOfPages = list(set(listOfPages))
+        listOfPages = checkValidPages(listOfPages, lastPage)
+        if checkIfPageRange(listOfPages):
+            return listOfPages
 
-logging.basicConfig( filename="gelbooru-image-scraper.log",
-                     filemode='w',
-                     format ='%(asctime)s - %(levelname)s - %(message)s', )
+def downloadPages(session, url, listOfPages):
+    for i in range(0, len(listOfPages)):
+        pid = getPIDFromPage(int(listOfPages[i]))
+        url = replacePID(url, pid)
+        page = requests.get(url)
+        soup = BeautifulSoup(page.text, 'html.parser')
+        pagination = soup.find("div", class_="pagination")
+        pages = pagination.findAll('a')
+        pid = getPID(url)
+        currentPage = pagination.find('b').text
+        listOfSitePages = getPages(pages)
+        lastPage = getHighestPage(listOfSitePages, listOfHrefs, int(currentPage))
+        previewLinks = makePreviewLinks(soup)
+        listOfImages = makeImageLinks(previewLinks)
+        listOfImages = getDownloadLink(listOfImages, session)
+        print("Downloading page " + str(i+1) + " out of " + str(len(listOfPages)))
+        print("Currently on page " + str(currentPage) + " out of " + str(lastPage) + " in total.")
+        print(url)
+        downloadPage(listOfImages, session)
+
+session = requests.session()
+session.headers.update({'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.88 Safari/537.36'})
 
 url = getAddress()
 path = getPath()
@@ -364,39 +410,7 @@ currentPage = pagination.find('b').text
 listOfSitePages = getPages(pages)
 listOfHrefs = getListOfHrefs(pagination)
 lastPage = getHighestPage(listOfSitePages, listOfHrefs, int(currentPage))
+listOfPages = getUserPages(lastPage)
+downloadPages(session, url, listOfPages)
 
-while(True):
-    userInput = getUserInput("Enter pages/page ranges to download images from, separated by commas.\n Input 0 to download from every page. \n Ranges are inclusive, written like 25-30 (pages from 25 to 30).\n")
-    uncleanTokens = getUncleanTokens(userInput)
-    cleanTokens = cleanUserInput(uncleanTokens)
-    listOfPages = parseUserInput(cleanTokens)
-    listOfPages = list(set(listOfPages))
-    listOfPages = checkValidPages(listOfPages, lastPage)
-    if checkIfPageRange(listOfPages):
-        break
 
-if downloadAll == True:
-    listOfPages = []
-    listOfPages.extend(1, int(lastPage))
-    listOfPages.append(int(lastPage))
-
-for i in range(0, len(listOfPages)):
-    pid = getPIDFromPage(int(listOfPages[i]))
-    url = replacePID(url, pid)
-    page = requests.get(url)
-    soup = BeautifulSoup(page.text, 'html.parser')
-    pagination = soup.find("div", class_="pagination")
-    pages = pagination.findAll('a')
-    pid = getPID(url)
-    currentPage = pagination.find('b').text
-    listOfSitePages = getPages(pages)
-    lastPage = getHighestPage(listOfSitePages, listOfHrefs, int(currentPage))
-    previewLinks = makePreviewLinks(soup)
-
-    listOfImages = makeImageLinks(previewLinks)
-    print("Making download links...")
-    listOfImages = getDownloadLink(listOfImages)
-    print("Downloading page " + str(i+1) + " out of " + str(len(listOfPages)))
-    print("Currently on page " + str(currentPage) + " out of " + str(lastPage) + " in total.")
-    print(url)
-    downloadImage(listOfImages)
